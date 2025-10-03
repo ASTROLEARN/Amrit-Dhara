@@ -1,9 +1,3 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -19,46 +13,41 @@ model GroundwaterSample {
   location    String
   latitude    Float
   longitude   Float
-  arsenic     Float    @default(0)    // As in mg/L
-  cadmium     Float    @default(0)    // Cd in mg/L
-  chromium    Float    @default(0)    // Cr in mg/L
-  lead        Float    @default(0)    // Pb in mg/L
-  mercury     Float    @default(0)    // Hg in mg/L
-  nickel      Float    @default(0)    // Ni in mg/L
-  copper      Float    @default(0)    // Cu in mg/L
-  zinc        Float    @default(0)    // Zn in mg/L
-  
-  // Calculated indices
+  arsenic     Float    @default(0)
+  cadmium     Float    @default(0)
+  chromium    Float    @default(0)
+  lead        Float    @default(0)
+  mercury     Float    @default(0)
+  nickel      Float    @default(0)
+  copper      Float    @default(0)
+  zinc        Float    @default(0)
   hpi         Float?
   hei         Float?
   cd          Float?
   npi         Float?
-  
-  // Quality categorizations
   hpiCategory String?
   heiCategory String?
   cdCategory  String?
   npiCategory String?
-  
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
-  
+
   @@map("groundwater_samples")
 }
 
 model AnalysisResult {
-  id           String   @id @default(cuid())
-  sampleId     String
-  hpi          Float
-  hei          Float
-  cd           Float
-  npi          Float
-  hpiCategory  String
-  heiCategory  String
-  cdCategory   String
-  npiCategory  String
+  id             String   @id @default(cuid())
+  sampleId       String
+  hpi            Float
+  hei            Float
+  cd             Float
+  npi            Float
+  hpiCategory    String
+  heiCategory    String
+  cdCategory     String
+  npiCategory    String
   overallQuality String
-  createdAt    DateTime @default(now())
-  
+  createdAt      DateTime @default(now())
+
   @@map("analysis_results")
 }
