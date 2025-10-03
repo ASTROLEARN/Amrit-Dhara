@@ -1,0 +1,1979 @@
+'use client';
+
+import { useState, useEffect } from 'react';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Skeleton } from '@/components/ui/skeleton';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, PieChart, Pie, Cell, ResponsiveContainer, LineChart, Line, ReferenceLine, Brush, Dot } from 'recharts';
+import { BarChart3, PieChart as PieChartIcon, TrendingUp, RefreshCw, Download, MapPin, Database, LineChart as LineChartIcon, Calendar, Target } from 'lucide-react';
+import { toast } from '@/hooks/use-toast';
+import html2canvas from 'html2canvas';
+import jsPDF from 'jspdf';
+import 'jspdf-autotable';
+
+interface Sample {
+  id: string;
+  sampleId: string;
+  location: string;
+  latitude: number;
+  longitude: number;
+  arsenic: number;
+  cadmium: number;
+  chromium: number;
+  lead: number;
+  mercury: number;
+  nickel: number;
+  copper: number;
+  zinc: number;
+  hpi: number | null;
+  hei: number | null;
+  cd: number | null;
+  npi: number | null;
+  hpiCategory: string | null;
+  heiCategory: string | null;
+  cdCategory: string | null;
+  npiCategory: string | null;
+  createdAt: string;
+}
+
+interface DataVisualizationProps {
+  refreshKey: number;
+}
+
+const COLORS = {
+  green: '#22c55e',
+  yellow: '#eab308',
+  red: '#ef4444',
+  blue: '#3b82f6',
+  orange: '#f97316',
+  purple: '#a855f7',
+  pink: '#ec4899',
+  cyan: '#06b6d4'
+};
+
+// Benchmark standards for heavy metals (mg/L)
+const BENCHMARK_STANDARDS = {
+  WHO: {
+    arsenic: 0.01,
+    cadmium: 0.003,
+    chromium: 0.05,
+    lead: 0.01,
+    mercury: 0.001,
+    nickel: 0.02,
+    copper: 2.0,
+    zinc: 3.0
+  },
+  EPA: {
+    arsenic: 0.01,
+    cadmium: 0.005,
+    chromium: 0.1,
+    lead: 0.015,
+    mercury: 0.002,
+    nickel: 0.1,
+    copper: 1.3,
+    zinc: 5.0
+  }
+};
+
+// WHO Standard values for HPI calculation
+const WHO_STANDARD_VALUES = {
+  arsenic: 0.01,
+  cadmium: 0.003,
+  chromium: 0.05,
+  lead: 0.01,
+  mercury: 0.001,
+  nickel: 0.02,
+  copper: 2.0,
+  zinc: 3.0
+};
+
+export function DataVisualization({ refreshKey }: DataVisualizationProps) {
+  const [samples, setSamples] = useState<Sample[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [selectedChart, setSelectedChart] = useState<string>('concentrations');
+  
+  // Individual location trend state
+  const [selectedLocation, setSelectedLocation] = useState<string>('');
+  const [locationTrendData, setLocationTrendData] = useState<Sample[]>([]);
+  const [trendLoading, setTrendLoading] = useState(false);
+  const [chartType, setChartType] = useState<'line' | 'bar'>('line');
+  const [selectedMetals, setSelectedMetals] = useState<string[]>(['arsenic', 'lead', 'cadmium', 'chromium']);
+  const [selectedIndices, setSelectedIndices] = useState<string[]>(['hpi', 'hei', 'cd', 'npi']);
+  const [generating, setGenerating] = useState(false);
+  const [exportingPdf, setExportingPdf] = useState(false);
+
+  // Dynamic Time Range Selector state
+  const [timeRange, setTimeRange] = useState<{start: string, end: string}>({
+    start: '',
+    end: ''
+  });
+  const [customTimeRange, setCustomTimeRange] = useState(false);
+
+  // Benchmark Comparison Overlay state
+  const [showBenchmark, setShowBenchmark] = useState(false);
+  const [benchmarkType, setBenchmarkType] = useState<'WHO' | 'EPA' | 'Custom'>('WHO');
+  const [customBenchmark, setCustomBenchmark] = useState<Record<string, number>>({});
+
+  const fetchSamples = async () => {
+    setLoading(true);
+    setError(null);
+
+    try {
+      const response = await fetch('/api/results?limit=200');
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Failed to fetch samples');
+      }
+
+      setSamples(result.data);
+
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to fetch samples';
+      setError(errorMessage);
+      toast({
+        title: "Error",
+        description: errorMessage,
+        variant: "destructive",
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchSamples();
+  }, [refreshKey]);
+
+  // Prepare data for metal concentrations bar chart
+  const getConcentrationData = () => {
+    if (samples.length === 0) return [];
+
+    const metals = ['As', 'Cd', 'Cr', 'Pb', 'Hg', 'Ni', 'Cu', 'Zn'];
+    const metalNames = {
+      'As': 'Arsenic',
+      'Cd': 'Cadmium',
+      'Cr': 'Chromium',
+      'Pb': 'Lead',
+      'Hg': 'Mercury',
+      'Ni': 'Nickel',
+      'Cu': 'Copper',
+      'Zn': 'Zinc'
+    };
+
+    return metals.map(metal => {
+      const values = samples.map(sample => {
+        switch (metal) {
+          case 'As': return sample.arsenic;
+          case 'Cd': return sample.cadmium;
+          case 'Cr': return sample.chromium;
+          case 'Pb': return sample.lead;
+          case 'Hg': return sample.mercury;
+          case 'Ni': return sample.nickel;
+          case 'Cu': return sample.copper;
+          case 'Zn': return sample.zinc;
+          default: return 0;
+        }
+      });
+
+      const avg = values.reduce((sum, val) => sum + val, 0) / values.length;
+      const max = Math.max(...values);
+      const min = Math.min(...values);
+
+      return {
+        name: metalNames[metal as keyof typeof metalNames],
+        average: parseFloat(avg.toFixed(4)),
+        maximum: parseFloat(max.toFixed(4)),
+        minimum: parseFloat(min.toFixed(4))
+      };
+    });
+  };
+
+  // Prepare data for pollution indices comparison
+  const getIndicesData = () => {
+    if (samples.length === 0) return [];
+
+    return samples.slice(0, 20).map(sample => ({
+      name: sample.sampleId,
+      HPI: sample.hpi || 0,
+      HEI: sample.hei || 0,
+      CD: sample.cd || 0,
+      NPI: sample.npi || 0
+    }));
+  };
+
+  // Prepare data for quality distribution pie charts
+  const getQualityDistribution = (index: string) => {
+    if (samples.length === 0) return [];
+
+    const distribution: Record<string, number> = {};
+    
+    samples.forEach(sample => {
+      let category = '';
+      switch (index) {
+        case 'hpi':
+          category = sample.hpiCategory || 'Unknown';
+          break;
+        case 'hei':
+          category = sample.heiCategory || 'Unknown';
+          break;
+        case 'cd':
+          category = sample.cdCategory || 'Unknown';
+          break;
+        case 'npi':
+          category = sample.npiCategory || 'Unknown';
+          break;
+      }
+      distribution[category] = (distribution[category] || 0) + 1;
+    });
+
+    return Object.entries(distribution).map(([name, value]) => ({
+      name,
+      value,
+      color: name.includes('Clean') || name.includes('Low') ? COLORS.green :
+             name.includes('Moderate') || name.includes('Medium') || name.includes('Slight') ? COLORS.yellow :
+             name.includes('High') || name.includes('Severe') ? COLORS.red : COLORS.blue
+    }));
+  };
+
+  // Prepare data for temporal trends
+  const getTemporalData = () => {
+    if (samples.length === 0) return [];
+
+    const sortedSamples = [...samples].sort((a, b) => 
+      new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+    );
+
+    return sortedSamples.map((sample, index) => ({
+      index: index + 1,
+      HPI: sample.hpi || 0,
+      HEI: sample.hei || 0,
+      CD: sample.cd || 0,
+      NPI: sample.npi || 0,
+      date: new Date(sample.createdAt).toLocaleDateString()
+    }));
+  };
+
+  // Individual location trend functions
+  const getUniqueLocations = () => {
+    const locationMap = new Map<string, { count: number; location: string; samples: Sample[] }>();
+    
+    samples.forEach(sample => {
+      const key = sample.location;
+      if (!locationMap.has(key)) {
+        locationMap.set(key, {
+          count: 0,
+          location: sample.location,
+          samples: []
+        });
+      }
+      const locationData = locationMap.get(key)!;
+      locationData.count++;
+      locationData.samples.push(sample);
+    });
+    
+    return Array.from(locationMap.values()).sort((a, b) => a.location.localeCompare(b.location));
+  };
+
+  const fetchLocationTrendData = async (locationName: string) => {
+    setTrendLoading(true);
+    try {
+      // Fetch all samples for this location by name only
+      const response = await fetch(`/api/results?location=${encodeURIComponent(locationName)}&limit=100`);
+      const result = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(result.error || 'Failed to fetch location data');
+      }
+      
+      // Sort by date
+      const sortedData = result.data.sort((a: Sample, b: Sample) => 
+        new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+      );
+      
+      setLocationTrendData(sortedData);
+      
+      toast({
+        title: "Location Data Loaded",
+        description: `Found ${sortedData.length} samples for ${locationName}`,
+      });
+    } catch (error) {
+      console.error('Error fetching location trend data:', error);
+      toast({
+        title: "Error",
+        description: "Failed to fetch location trend data",
+        variant: "destructive"
+      });
+    } finally {
+      setTrendLoading(false);
+    }
+  };
+
+  const handleLocationChange = (locationName: string) => {
+    setSelectedLocation(locationName);
+    if (locationName) {
+      fetchLocationTrendData(locationName);
+    } else {
+      setLocationTrendData([]);
+    }
+  };
+
+  const getTrendChartData = () => {
+    const filteredData = getFilteredTrendData();
+    if (filteredData.length === 0) return [];
+    
+    return filteredData.map(sample => ({
+      date: new Date(sample.createdAt).toLocaleDateString(),
+      fullDate: sample.createdAt,
+      arsenic: sample.arsenic,
+      cadmium: sample.cadmium,
+      chromium: sample.chromium,
+      lead: sample.lead,
+      mercury: sample.mercury,
+      nickel: sample.nickel,
+      copper: sample.copper,
+      zinc: sample.zinc,
+      hpi: sample.hpi,
+      hei: sample.hei,
+      cd: sample.cd,
+      npi: sample.npi
+    }));
+  };
+
+  const generateSampleTrendData = async () => {
+    setGenerating(true);
+    try {
+      const response = await fetch('/api/generate-trend-data', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ locationsPerTrend: 3, dataPointsPerLocation: 6 })
+      });
+      const result = await response.json();
+      if (response.ok) {
+        toast({
+          title: "Trend Data Generated",
+          description: result.message,
+        });
+        fetchSamples(); // Refresh the data
+      } else {
+        throw new Error(result.error);
+      }
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to generate trend data",
+        variant: "destructive"
+      });
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  // Helper functions for new features
+  const getFilteredTrendData = () => {
+    let filteredData = [...locationTrendData];
+    
+    // Apply time range filter
+    if (customTimeRange && timeRange.start && timeRange.end) {
+      filteredData = filteredData.filter(sample => {
+        const sampleDate = new Date(sample.createdAt);
+        const startDate = new Date(timeRange.start);
+        const endDate = new Date(timeRange.end);
+        return sampleDate >= startDate && sampleDate <= endDate;
+      });
+    }
+    
+    return filteredData;
+  };
+
+  const getCurrentBenchmark = () => {
+    if (benchmarkType === 'Custom') {
+      return customBenchmark;
+    }
+    return BENCHMARK_STANDARDS[benchmarkType];
+  };
+
+  const getBenchmarkValue = (metal: string) => {
+    const benchmark = getCurrentBenchmark();
+    return benchmark[metal] || 0;
+  };
+
+  // Improved benchmark display - show only most critical benchmarks
+  const getCriticalBenchmarkLines = (selectedItems: string[], itemType: 'metals' | 'indices') => {
+    if (!showBenchmark) return [];
+    
+    const lines: Array<{key: string, y: number, label: string, position: string}> = [];
+    
+    if (itemType === 'metals') {
+      // Only show benchmarks for metals that have values exceeding 50% of the limit
+      selectedItems.forEach((metal, index) => {
+        const benchmarkValue = getBenchmarkValue(metal);
+        if (benchmarkValue > 0) {
+          const maxDataValue = Math.max(...getFilteredTrendData().map(d => d[metal] || 0));
+          if (maxDataValue > benchmarkValue * 0.5) {
+            lines.push({
+              key: `benchmark-${metal}`,
+              y: benchmarkValue,
+              label: metal.charAt(0).toUpperCase() + metal.slice(1),
+              position: index % 2 === 0 ? 'left' : 'right'
+            });
+          }
+        }
+      });
+    } else {
+      // For indices, only show HPI threshold if HPI is selected
+      if (selectedItems.includes('hpi')) {
+        lines.push({
+          key: 'hpi-threshold',
+          y: 100,
+          label: 'HPI Limit',
+          position: 'left'
+        });
+      }
+    }
+    
+    return lines;
+  };
+
+  // PDF Export function for location trends
+  // Enhanced PDF export function with improved formatting and colors
+  const exportLocationTrendsToPdf = async () => {
+    console.log('Export PDF clicked');
+    console.log('Selected location:', selectedLocation);
+    console.log('Location trend data length:', locationTrendData.length);
+    
+    if (!selectedLocation || locationTrendData.length === 0) {
+      console.log('Validation failed: no location or data');
+      toast({
+        title: "Cannot Export",
+        description: "Please select a location with trend data first",
+        variant: "destructive"
+      });
+      return;
+    }
+
+    setExportingPdf(true);
+    
+    // Store original styles and temporarily replace with PDF-safe styles
+    const originalStyle = document.documentElement.getAttribute('style');
+    const originalTheme = document.documentElement.classList.contains('dark');
+    
+    try {
+      console.log('Starting enhanced PDF export...');
+      
+      // Temporarily disable dark mode and override CSS variables
+      document.documentElement.classList.remove('dark');
+      document.documentElement.style.setProperty('--background', '#ffffff');
+      document.documentElement.style.setProperty('--foreground', '#000000');
+      document.documentElement.style.setProperty('--card', '#ffffff');
+      document.documentElement.style.setProperty('--card-foreground', '#000000');
+      document.documentElement.style.setProperty('--popover', '#ffffff');
+      document.documentElement.style.setProperty('--popover-foreground', '#000000');
+      document.documentElement.style.setProperty('--primary', '#000000');
+      document.documentElement.style.setProperty('--primary-foreground', '#ffffff');
+      document.documentElement.style.setProperty('--secondary', '#f0f0f0');
+      document.documentElement.style.setProperty('--secondary-foreground', '#000000');
+      document.documentElement.style.setProperty('--muted', '#f0f0f0');
+      document.documentElement.style.setProperty('--muted-foreground', '#787878');
+      document.documentElement.style.setProperty('--accent', '#f0f0f0');
+      document.documentElement.style.setProperty('--accent-foreground', '#000000');
+      document.documentElement.style.setProperty('--destructive', '#dc2626');
+      document.documentElement.style.setProperty('--border', '#dcdcdc');
+      document.documentElement.style.setProperty('--input', '#dcdcdc');
+      document.documentElement.style.setProperty('--ring', '#969696');
+      
+      // Wait a moment for styles to apply
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
+      // Create a new PDF document
+      const pdf = new jsPDF('p', 'mm', 'a4');
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      
+      console.log('Enhanced PDF document created');
+      
+      // Helper function to add header
+      const addHeader = () => {
+        // Add colored header bar
+        pdf.setFillColor(59, 130, 246); // Blue color
+        pdf.rect(0, 0, pageWidth, 15, 'F');
+        
+        // Add white text in header
+        pdf.setTextColor(255, 255, 255);
+        pdf.setFontSize(10);
+        pdf.setFont('helvetica', 'bold');
+        pdf.text('Groundwater Quality Analysis Report', pageWidth / 2, 10, { align: 'center' });
+        
+        // Reset text color
+        pdf.setTextColor(0, 0, 0);
+      };
+      
+      // Helper function to add footer
+      const addFooter = () => {
+        const footerY = pageHeight - 10;
+        
+        // Add colored footer bar
+        pdf.setFillColor(243, 244, 246); // Light gray
+        pdf.rect(0, footerY - 5, pageWidth, 10, 'F');
+        
+        // Add footer text
+        pdf.setTextColor(100, 100, 100);
+        pdf.setFontSize(8);
+        pdf.setFont('helvetica', 'normal');
+        pdf.text(`Generated on ${new Date().toLocaleDateString()} at ${new Date().toLocaleTimeString()}`, pageWidth / 2, footerY, { align: 'center' });
+        pdf.text('Page ' + (pdf.internal.pages.length - 1), pageWidth - 20, footerY, { align: 'right' });
+        
+        // Reset text color
+        pdf.setTextColor(0, 0, 0);
+      };
+      
+      // Add header to first page
+      addHeader();
+      
+      // Add main title with styling
+      pdf.setFontSize(24);
+      pdf.setFont('helvetica', 'bold');
+      pdf.setTextColor(31, 41, 55); // Dark gray
+      pdf.text('Location Trends Analysis', pageWidth / 2, 35, { align: 'center' });
+      
+      // Add subtitle
+      pdf.setFontSize(14);
+      pdf.setFont('helvetica', 'normal');
+      pdf.setTextColor(75, 85, 99); // Medium gray
+      pdf.text('Comprehensive Water Quality Assessment', pageWidth / 2, 45, { align: 'center' });
+      
+      // Add location information in a styled box
+      const infoBoxY = 55;
+      pdf.setFillColor(249, 250, 251); // Light background
+      pdf.rect(15, infoBoxY - 5, pageWidth - 30, 30, 'F');
+      pdf.setDrawColor(209, 213, 219); // Border
+      pdf.rect(15, infoBoxY - 5, pageWidth - 30, 30, 'S');
+      
+      pdf.setFontSize(12);
+      pdf.setFont('helvetica', 'bold');
+      pdf.setTextColor(31, 41, 55);
+      pdf.text(`Location: ${selectedLocation}`, 25, infoBoxY + 5);
+      
+      pdf.setFont('helvetica', 'normal');
+      pdf.setTextColor(75, 85, 99);
+      pdf.text(`Total Samples: ${locationTrendData.length}`, 25, infoBoxY + 12);
+      pdf.text(`Analysis Date: ${new Date().toLocaleDateString()}`, 25, infoBoxY + 19);
+      
+      // Add summary badges
+      const hpiValues = locationTrendData.map(d => d.hpi || 0);
+      const avgHPI = hpiValues.reduce((a, b) => a + b, 0) / hpiValues.length;
+      const maxHPI = Math.max(...hpiValues);
+      const minHPI = Math.min(...hpiValues);
+      const trend = hpiValues.length > 1 ? 
+        (hpiValues[hpiValues.length - 1] > hpiValues[0] ? '📈 Increasing' : 
+         hpiValues[hpiValues.length - 1] < hpiValues[0] ? '📉 Decreasing' : '➡️ Stable') : 
+        '📊 Insufficient data';
+      
+      // Add trend indicator with color
+      pdf.setFontSize(11);
+      pdf.setFont('helvetica', 'bold');
+      if (trend.includes('Increasing')) {
+        pdf.setTextColor(239, 68, 68); // Red
+      } else if (trend.includes('Decreasing')) {
+        pdf.setTextColor(34, 197, 94); // Green
+      } else {
+        pdf.setTextColor(59, 130, 246); // Blue
+      }
+      pdf.text(`Overall Trend: ${trend}`, 25, infoBoxY + 26);
+      
+      pdf.setTextColor(0, 0, 0); // Reset color
+      
+      let yPosition = 95;
+      
+      // Capture and add metal concentration chart
+      console.log('Looking for metal chart element...');
+      const metalChartElement = document.getElementById('location-trends-chart');
+      console.log('Metal chart element:', metalChartElement);
+      
+      if (metalChartElement) {
+        try {
+          console.log('Capturing metal chart...');
+          
+          // Add section header with color
+          pdf.setFillColor(59, 130, 246, 0.1); // Light blue
+          pdf.rect(15, yPosition - 8, pageWidth - 30, 12, 'F');
+          
+          pdf.setFontSize(16);
+          pdf.setFont('helvetica', 'bold');
+          pdf.setTextColor(59, 130, 246);
+          pdf.text('🧪 Metal Concentration Trends', 20, yPosition);
+          yPosition += 10;
+          
+          pdf.setFontSize(10);
+          pdf.setFont('helvetica', 'normal');
+          pdf.setTextColor(75, 85, 99);
+          pdf.text('Heavy metal concentrations over time (mg/L)', 20, yPosition);
+          yPosition += 8;
+          
+          const metalCanvas = await html2canvas(metalChartElement, {
+            backgroundColor: '#ffffff',
+            scale: 2,
+            logging: false,
+            useCORS: true,
+            ignoreElements: (element) => {
+              return element.tagName === 'STYLE' || element.tagName === 'LINK' || element.tagName === 'SCRIPT';
+            },
+            onclone: (clonedDoc) => {
+              // Enhanced styling for PDF
+              const style = clonedDoc.createElement('style');
+              style.textContent = `
+                * { background: #fff !important; color: #000 !important; }
+                .recharts-text { fill: #000 !important; font-weight: 500 !important; }
+                .recharts-cartesian-axis-tick-value { font-size: 10px !important; }
+                .recharts-legend-item-text { font-size: 11px !important; }
+              `;
+              clonedDoc.head.appendChild(style);
+            }
+          });
+          
+          console.log('Metal chart captured successfully');
+          const metalImgData = metalCanvas.toDataURL('image/png');
+          const metalImgWidth = pageWidth - 40;
+          const metalImgHeight = (metalCanvas.height * metalImgWidth) / metalCanvas.width;
+          
+          // Add metal chart image with border
+          if (yPosition + metalImgHeight > pageHeight - 30) {
+            pdf.addPage();
+            addHeader();
+            yPosition = 25;
+          }
+          
+          // Add border around chart
+          pdf.setDrawColor(209, 213, 219);
+          pdf.rect(20, yPosition - 2, metalImgWidth, metalImgHeight + 4, 'S');
+          
+          const xPos = (pageWidth - metalImgWidth) / 2;
+          pdf.addImage(metalImgData, 'PNG', xPos, yPosition, metalImgWidth, metalImgHeight);
+          yPosition += metalImgHeight + 20;
+          
+          console.log('Metal chart added to PDF');
+        } catch (error) {
+          console.error('Error capturing metal chart:', error);
+          toast({
+            title: "Chart Capture Error",
+            description: "Failed to capture metal concentration chart",
+            variant: "destructive"
+          });
+        }
+      }
+      
+      // Add footer to first page
+      addFooter();
+      
+      // Add new page for pollution indices chart
+      pdf.addPage();
+      addHeader();
+      yPosition = 25;
+      
+      // Capture and add pollution indices chart
+      console.log('Looking for index chart element...');
+      const indexChartElement = document.getElementById('pollution-index-chart');
+      console.log('Index chart element:', indexChartElement);
+      
+      if (indexChartElement) {
+        try {
+          console.log('Capturing index chart...');
+          
+          // Add section header with color
+          pdf.setFillColor(168, 85, 247, 0.1); // Light purple
+          pdf.rect(15, yPosition - 8, pageWidth - 30, 12, 'F');
+          
+          pdf.setFontSize(16);
+          pdf.setFont('helvetica', 'bold');
+          pdf.setTextColor(168, 85, 247);
+          pdf.text('📊 Pollution Indices Trends', 20, yPosition);
+          yPosition += 10;
+          
+          pdf.setFontSize(10);
+          pdf.setFont('helvetica', 'normal');
+          pdf.setTextColor(75, 85, 99);
+          pdf.text('Comprehensive pollution index analysis over time', 20, yPosition);
+          yPosition += 8;
+          
+          const indexCanvas = await html2canvas(indexChartElement, {
+            backgroundColor: '#ffffff',
+            scale: 2,
+            logging: false,
+            useCORS: true,
+            ignoreElements: (element) => {
+              return element.tagName === 'STYLE' || element.tagName === 'LINK' || element.tagName === 'SCRIPT';
+            },
+            onclone: (clonedDoc) => {
+              // Enhanced styling for PDF
+              const style = clonedDoc.createElement('style');
+              style.textContent = `
+                * { background: #fff !important; color: #000 !important; }
+                .recharts-text { fill: #000 !important; font-weight: 500 !important; }
+                .recharts-cartesian-axis-tick-value { font-size: 10px !important; }
+                .recharts-legend-item-text { font-size: 11px !important; }
+              `;
+              clonedDoc.head.appendChild(style);
+            }
+          });
+          
+          console.log('Index chart captured successfully');
+          const indexImgData = indexCanvas.toDataURL('image/png');
+          const indexImgWidth = pageWidth - 40;
+          const indexImgHeight = (indexCanvas.height * indexImgWidth) / indexCanvas.width;
+          
+          // Add index chart image with border
+          if (yPosition + indexImgHeight > pageHeight - 30) {
+            pdf.addPage();
+            addHeader();
+            yPosition = 25;
+          }
+          
+          // Add border around chart
+          pdf.setDrawColor(209, 213, 219);
+          pdf.rect(20, yPosition - 2, indexImgWidth, indexImgHeight + 4, 'S');
+          
+          const xPos = (pageWidth - indexImgWidth) / 2;
+          pdf.addImage(indexImgData, 'PNG', xPos, yPosition, indexImgWidth, indexImgHeight);
+          yPosition += indexImgHeight + 20;
+          
+          console.log('Index chart added to PDF');
+        } catch (error) {
+          console.error('Error capturing index chart:', error);
+          toast({
+            title: "Chart Capture Error",
+            description: "Failed to capture pollution indices chart",
+            variant: "destructive"
+          });
+        }
+      }
+      
+      // Add footer to second page
+      addFooter();
+      
+      // Add new page for detailed statistics
+      pdf.addPage();
+      addHeader();
+      yPosition = 25;
+      
+      // Statistics section header
+      pdf.setFillColor(34, 197, 94, 0.1); // Light green
+      pdf.rect(15, yPosition - 8, pageWidth - 30, 12, 'F');
+      
+      pdf.setFontSize(16);
+      pdf.setFont('helvetica', 'bold');
+      pdf.setTextColor(34, 197, 94);
+      pdf.text('📈 Statistical Analysis', 20, yPosition);
+      yPosition += 15;
+      
+      // Create statistics cards
+      const stats = [
+        { label: 'Average HPI', value: avgHPI.toFixed(2), color: [59, 130, 246], icon: '📊' },
+        { label: 'Maximum HPI', value: maxHPI.toFixed(2), color: [239, 68, 68], icon: '⬆️' },
+        { label: 'Minimum HPI', value: minHPI.toFixed(2), color: [34, 197, 94], icon: '⬇️' },
+        { label: 'Trend', value: trend, color: trend.includes('Increasing') ? [239, 68, 68] : trend.includes('Decreasing') ? [34, 197, 94] : [59, 130, 246], icon: '' }
+      ];
+      
+      // Draw statistics cards
+      const cardWidth = (pageWidth - 50) / 2;
+      const cardHeight = 25;
+      let cardX = 20;
+      let cardY = yPosition;
+      
+      stats.forEach((stat, index) => {
+        if (index % 2 === 0 && index > 0) {
+          cardX = 20;
+          cardY += cardHeight + 10;
+        }
+        
+        // Card background
+        pdf.setFillColor(stat.color[0], stat.color[1], stat.color[2], 0.05);
+        pdf.rect(cardX, cardY, cardWidth, cardHeight, 'F');
+        
+        // Card border
+        pdf.setDrawColor(stat.color[0], stat.color[1], stat.color[2]);
+        pdf.rect(cardX, cardY, cardWidth, cardHeight, 'S');
+        
+        // Card content
+        pdf.setFontSize(10);
+        pdf.setFont('helvetica', 'normal');
+        pdf.setTextColor(75, 85, 99);
+        pdf.text(`${stat.icon} ${stat.label}`, cardX + 5, cardY + 10);
+        
+        pdf.setFontSize(14);
+        pdf.setFont('helvetica', 'bold');
+        pdf.setTextColor(stat.color[0], stat.color[1], stat.color[2]);
+        pdf.text(stat.value, cardX + 5, cardY + 20);
+        
+        cardX += cardWidth + 10;
+      });
+      
+      yPosition = cardY + cardHeight + 20;
+      
+      // Add detailed data table
+      pdf.setFillColor(249, 250, 251); // Light background
+      pdf.rect(15, yPosition - 8, pageWidth - 30, 12, 'F');
+      
+      pdf.setFontSize(14);
+      pdf.setFont('helvetica', 'bold');
+      pdf.setTextColor(31, 41, 55);
+      pdf.text('📋 Sample Data Details', 20, yPosition);
+      yPosition += 15;
+      
+      // Enhanced table header
+      pdf.setFillColor(59, 130, 246); // Blue header
+      pdf.rect(15, yPosition - 5, pageWidth - 30, 10, 'F');
+      
+      pdf.setTextColor(255, 255, 255);
+      pdf.setFontSize(9);
+      pdf.setFont('helvetica', 'bold');
+      pdf.text('Date', 20, yPosition);
+      pdf.text('HPI', 50, yPosition);
+      pdf.text('HEI', 75, yPosition);
+      pdf.text('As (mg/L)', 105, yPosition);
+      pdf.text('Cd (mg/L)', 140, yPosition);
+      pdf.text('Pb (mg/L)', 175, yPosition);
+      yPosition += 5;
+      
+      // Table data with alternating row colors
+      pdf.setTextColor(0, 0, 0);
+      pdf.setFont('helvetica', 'normal');
+      const samplesToShow = Math.min(15, locationTrendData.length);
+      
+      for (let i = 0; i < samplesToShow; i++) {
+        const sample = locationTrendData[i];
+        
+        // Alternating row colors
+        if (i % 2 === 0) {
+          pdf.setFillColor(249, 250, 251);
+          pdf.rect(15, yPosition - 2, pageWidth - 30, 8, 'F');
+        }
+        
+        pdf.setFontSize(8);
+        pdf.text(new Date(sample.createdAt).toLocaleDateString(), 20, yPosition + 3);
+        pdf.text((sample.hpi || 0).toFixed(1), 50, yPosition + 3);
+        pdf.text((sample.hei || 0).toFixed(1), 75, yPosition + 3);
+        pdf.text((sample.arsenic || 0).toFixed(3), 105, yPosition + 3);
+        pdf.text((sample.cadmium || 0).toFixed(3), 140, yPosition + 3);
+        pdf.text((sample.lead || 0).toFixed(3), 175, yPosition + 3);
+        yPosition += 8;
+        
+        if (yPosition > pageHeight - 40) {
+          pdf.addPage();
+          addHeader();
+          yPosition = 25;
+        }
+      }
+      
+      // Add insights section
+      if (yPosition < pageHeight - 60) {
+        yPosition += 10;
+        
+        pdf.setFillColor(251, 191, 36, 0.1); // Light yellow
+        pdf.rect(15, yPosition - 8, pageWidth - 30, 12, 'F');
+        
+        pdf.setFontSize(14);
+        pdf.setFont('helvetica', 'bold');
+        pdf.setTextColor(217, 119, 6); // Orange
+        pdf.text('💡 Key Insights', 20, yPosition);
+        yPosition += 15;
+        
+        pdf.setFontSize(10);
+        pdf.setFont('helvetica', 'normal');
+        pdf.setTextColor(75, 85, 99);
+        
+        const insights = [
+          `• Average HPI of ${avgHPI.toFixed(2)} indicates ${avgHPI > 100 ? 'high pollution levels' : avgHPI > 50 ? 'moderate pollution' : 'low pollution levels'}`,
+          `• Data spans ${locationTrendData.length} samples collected over time`,
+          `• Trend analysis shows ${trend.toLowerCase()} pollution pattern`,
+          `• Regular monitoring recommended for water quality management`
+        ];
+        
+        insights.forEach(insight => {
+          const lines = pdf.splitTextToSize(insight, pageWidth - 40);
+          lines.forEach((line: string) => {
+            pdf.text(line, 20, yPosition);
+            yPosition += 5;
+          });
+          yPosition += 2;
+        });
+      }
+      
+      // Add final footer
+      addFooter();
+      
+      // Save the PDF with enhanced filename
+      const filename = `location-trends-${selectedLocation.replace(/[,\s]/g, '-')}-${new Date().toISOString().split('T')[0]}.pdf`;
+      pdf.save(filename);
+      
+      toast({
+        title: "Export Successful",
+        description: "Enhanced location trends report has been downloaded",
+      });
+      
+    } catch (error) {
+      console.error('PDF export failed:', error);
+      toast({
+        title: "Export Failed",
+        description: `Failed to export location trends to PDF: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        variant: "destructive"
+      });
+    } finally {
+      // Restore original styles
+      if (originalTheme) {
+        document.documentElement.classList.add('dark');
+      }
+      if (originalStyle) {
+        document.documentElement.setAttribute('style', originalStyle);
+      } else {
+        document.documentElement.removeAttribute('style');
+      }
+      
+      setExportingPdf(false);
+    }
+  };
+  if (loading) {
+    return (
+      <div className="space-y-6">
+        <Card>
+          <CardHeader>
+            <Skeleton className="h-6 w-32" />
+          </CardHeader>
+          <CardContent>
+            <Skeleton className="h-80 w-full" />
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <Alert variant="destructive">
+        <BarChart3 className="h-4 w-4" />
+        <AlertDescription>{error}</AlertDescription>
+      </Alert>
+    );
+  }
+
+  if (samples.length === 0) {
+    return (
+      <Card>
+        <CardContent className="flex flex-col items-center justify-center py-12">
+          <BarChart3 className="h-12 w-12 text-muted-foreground mb-4" />
+          <h3 className="text-lg font-medium mb-2">No data to visualize</h3>
+          <p className="text-muted-foreground text-center">
+            Upload sample data to see charts and analytics.
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const concentrationData = getConcentrationData();
+  const indicesData = getIndicesData();
+  const hpiDistribution = getQualityDistribution('hpi');
+  const heiDistribution = getQualityDistribution('hei');
+  const cdDistribution = getQualityDistribution('cd');
+  const npiDistribution = getQualityDistribution('npi');
+  const temporalData = getTemporalData();
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+          <h2 className="text-xl sm:text-2xl lg:text-3xl font-bold">Data Visualization</h2>
+          <p className="text-sm sm:text-base text-muted-foreground">Charts and analytics for groundwater pollution data</p>
+        </div>
+        <Button variant="outline" size="sm" onClick={fetchSamples}>
+          <RefreshCw className="mr-2 h-4 w-4" />
+          <span className="hidden sm:inline">Refresh</span>
+          <span className="sm:hidden">↻</span>
+        </Button>
+      </div>
+
+      <Tabs value={selectedChart} onValueChange={setSelectedChart} className="w-full">
+        <TabsList className="grid w-full grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-1 h-auto p-1">
+          <TabsTrigger value="concentrations" className="text-xs sm:text-sm py-2 px-2">Concentrations</TabsTrigger>
+          <TabsTrigger value="indices" className="text-xs sm:text-sm py-2 px-2">Indices</TabsTrigger>
+          <TabsTrigger value="distribution" className="text-xs sm:text-sm py-2 px-2">Distribution</TabsTrigger>
+          <TabsTrigger value="trends" className="text-xs sm:text-sm py-2 px-2 hidden sm:block">Overall Trends</TabsTrigger>
+          <TabsTrigger value="location-trends" className="text-xs sm:text-sm py-2 px-2 hidden lg:block">Location Trends</TabsTrigger>
+          {/* Mobile fallback for hidden tabs */}
+          <TabsTrigger value="trends" className="text-xs sm:text-sm py-2 px-2 sm:hidden">Trends</TabsTrigger>
+          <TabsTrigger value="location-trends" className="text-xs sm:text-sm py-2 px-2 lg:hidden">Location</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="concentrations" className="space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>Metal Concentrations</CardTitle>
+              <CardDescription>
+                Average, maximum, and minimum concentrations of heavy metals (mg/L)
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="p-2 sm:p-4">
+              <ResponsiveContainer width="100%" height={300}>
+                <BarChart data={concentrationData}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="name" fontSize={12} angle={-45} textAnchor="end" height={80} />
+                  <YAxis fontSize={12} />
+                  <Tooltip />
+                  <Legend wrapperStyle={{ fontSize: '12px' }} />
+                  <Bar dataKey="average" fill={COLORS.blue} name="Average" />
+                  <Bar dataKey="maximum" fill={COLORS.red} name="Maximum" />
+                  <Bar dataKey="minimum" fill={COLORS.green} name="Minimum" />
+                </BarChart>
+              </ResponsiveContainer>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="indices" className="space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>Pollution Indices Comparison</CardTitle>
+              <CardDescription>
+                Comparison of different pollution indices across samples
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="p-2 sm:p-4">
+              <ResponsiveContainer width="100%" height={300}>
+                <BarChart data={indicesData}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="name" fontSize={12} angle={-45} textAnchor="end" height={80} />
+                  <YAxis fontSize={12} />
+                  <Tooltip />
+                  <Legend wrapperStyle={{ fontSize: '12px' }} />
+                  <Bar dataKey="HPI" fill={COLORS.purple} />
+                  <Bar dataKey="HEI" fill={COLORS.orange} />
+                  <Bar dataKey="CD" fill={COLORS.cyan} />
+                  <Bar dataKey="NPI" fill={COLORS.pink} />
+                </BarChart>
+              </ResponsiveContainer>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="distribution" className="space-y-4 sm:space-y-6">
+          <div className="grid gap-4 sm:gap-6 grid-cols-1 lg:grid-cols-2">
+            <Card>
+              <CardHeader>
+                <CardTitle>HPI Distribution</CardTitle>
+                <CardDescription>Heavy Metal Pollution Index categories</CardDescription>
+              </CardHeader>
+              <CardContent className="p-2 sm:p-4">
+                <ResponsiveContainer width="100%" height={250}>
+                  <PieChart>
+                    <Pie
+                      data={hpiDistribution}
+                      cx="50%"
+                      cy="50%"
+                      labelLine={false}
+                      label={({ name, percent }: any) => {
+                        const percentage = ((percent as number) * 100).toFixed(0);
+                        return window.innerWidth < 640 ? `${percentage}%` : `${name} ${percentage}%`;
+                      }}
+                      outerRadius={window.innerWidth < 640 ? 60 : 80}
+                      fill="#8884d8"
+                      dataKey="value"
+                    >
+                      {hpiDistribution.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={entry.color} />
+                      ))}
+                    </Pie>
+                    <Tooltip />
+                  </PieChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>HEI Distribution</CardTitle>
+                <CardDescription>Heavy Metal Evaluation Index categories</CardDescription>
+              </CardHeader>
+              <CardContent className="p-2 sm:p-4">
+                <ResponsiveContainer width="100%" height={250}>
+                  <PieChart>
+                    <Pie
+                      data={heiDistribution}
+                      cx="50%"
+                      cy="50%"
+                      labelLine={false}
+                      label={({ name, percent }: any) => {
+                        const percentage = ((percent as number) * 100).toFixed(0);
+                        return window.innerWidth < 640 ? `${percentage}%` : `${name} ${percentage}%`;
+                      }}
+                      outerRadius={window.innerWidth < 640 ? 60 : 80}
+                      fill="#8884d8"
+                      dataKey="value"
+                    >
+                      {heiDistribution.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={entry.color} />
+                      ))}
+                    </Pie>
+                    <Tooltip />
+                  </PieChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>CD Distribution</CardTitle>
+                <CardDescription>Contamination Degree categories</CardDescription>
+              </CardHeader>
+              <CardContent className="p-2 sm:p-4">
+                <ResponsiveContainer width="100%" height={250}>
+                  <PieChart>
+                    <Pie
+                      data={cdDistribution}
+                      cx="50%"
+                      cy="50%"
+                      labelLine={false}
+                      label={({ name, percent }: any) => {
+                        const percentage = ((percent as number) * 100).toFixed(0);
+                        return window.innerWidth < 640 ? `${percentage}%` : `${name} ${percentage}%`;
+                      }}
+                      outerRadius={window.innerWidth < 640 ? 60 : 80}
+                      fill="#8884d8"
+                      dataKey="value"
+                    >
+                      {cdDistribution.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={entry.color} />
+                      ))}
+                    </Pie>
+                    <Tooltip />
+                  </PieChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>NPI Distribution</CardTitle>
+                <CardDescription>Nemerow Pollution Index categories</CardDescription>
+              </CardHeader>
+              <CardContent className="p-2 sm:p-4">
+                <ResponsiveContainer width="100%" height={250}>
+                  <PieChart>
+                    <Pie
+                      data={npiDistribution}
+                      cx="50%"
+                      cy="50%"
+                      labelLine={false}
+                      label={({ name, percent }: any) => {
+                        const percentage = ((percent as number) * 100).toFixed(0);
+                        return window.innerWidth < 640 ? `${percentage}%` : `${name} ${percentage}%`;
+                      }}
+                      outerRadius={window.innerWidth < 640 ? 60 : 80}
+                      fill="#8884d8"
+                      dataKey="value"
+                    >
+                      {npiDistribution.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={entry.color} />
+                      ))}
+                    </Pie>
+                    <Tooltip />
+                  </PieChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
+          </div>
+        </TabsContent>
+
+        <TabsContent value="trends" className="space-y-6">
+          {/* Enhanced Temporal Trends */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <TrendingUp className="h-5 w-5" />
+                Overall Pollution Trends
+              </CardTitle>
+              <CardDescription>
+                Pollution indices trends over time across all samples (chronological order)
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="p-2 sm:p-4">
+              <ResponsiveContainer width="100%" height={300}>
+                <LineChart data={temporalData}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="index" label={{ value: "Sample Sequence", position: "insideBottom", offset: -5 }} fontSize={12} />
+                  <YAxis 
+                    label={{ value: "Pollution Index Value", angle: -90, position: "insideLeft" }}
+                    domain={['auto', 'dataMax']}
+                    padding={{ top: 20, bottom: 20 }}
+                    fontSize={12}
+                  />
+                  <Tooltip 
+                    content={({ active, payload, label }) => {
+                      if (active && payload && payload.length) {
+                        const data = payload[0].payload;
+                        return (
+                          <div className="bg-white p-2 sm:p-3 border rounded-lg shadow-lg max-w-xs">
+                            <p className="font-semibold mb-1 sm:mb-2 text-sm">Sample #{label}</p>
+                            <p className="text-xs text-gray-500 mb-1 sm:mb-2">{data.date}</p>
+                            {payload.map((entry, index) => (
+                              <p key={index} style={{ color: entry.color }} className="text-xs sm:text-sm">
+                                {entry.name}: {entry.value?.toFixed(2)}
+                              </p>
+                            ))}
+                          </div>
+                        );
+                      }
+                      return null;
+                    }}
+                  />
+                  <Legend wrapperStyle={{ fontSize: '12px' }} />
+                  <Line type="monotone" dataKey="HPI" stroke={COLORS.purple} strokeWidth={2} dot={{ r: 3 }} />
+                  <Line type="monotone" dataKey="HEI" stroke={COLORS.orange} strokeWidth={2} dot={{ r: 3 }} />
+                  <Line type="monotone" dataKey="CD" stroke={COLORS.cyan} strokeWidth={2} dot={{ r: 3 }} />
+                  <Line type="monotone" dataKey="NPI" stroke={COLORS.pink} strokeWidth={2} dot={{ r: 3 }} />
+                </LineChart>
+              </ResponsiveContainer>
+            </CardContent>
+          </Card>
+
+        </TabsContent>
+
+        <TabsContent value="location-trends" className="space-y-4 sm:space-y-6">
+          {/* Individual Location Trend Analysis */}
+          <Card>
+            <CardHeader className="pb-4 sm:pb-6">
+              <CardTitle className="flex items-center gap-2 text-lg sm:text-xl">
+                <MapPin className="h-5 w-5" />
+                Individual Location Trend Analysis
+              </CardTitle>
+              <CardDescription className="text-sm sm:text-base">
+                Track pollution trends for specific locations over time. Perfect for monitoring repeated sampling at the same location.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4 sm:space-y-6">
+              {samples.length === 0 ? (
+                <div className="text-center py-8 sm:py-12 bg-amber-50 rounded-lg px-4">
+                  <TrendingUp className="h-10 w-10 sm:h-12 sm:w-12 mx-auto mb-4 text-amber-600" />
+                  <h3 className="text-base sm:text-lg font-semibold text-amber-800 mb-2">No Data Available</h3>
+                  <p className="text-amber-600 mb-4 text-sm sm:text-base">Please add some sample data first to see location trends.</p>
+                  <p className="text-xs sm:text-sm text-amber-500">Go to the main page and add sample data using the Data Input tab.</p>
+                </div>
+              ) : getUniqueLocations().length === 0 ? (
+                <div className="text-center py-8 sm:py-12 bg-blue-50 rounded-lg px-4">
+                  <MapPin className="h-10 w-10 sm:h-12 sm:w-12 mx-auto mb-4 text-blue-600" />
+                  <h3 className="text-base sm:text-lg font-semibold text-blue-800 mb-2">Processing Data</h3>
+                  <p className="text-blue-600 text-sm sm:text-base">Please wait while we process the location data...</p>
+                </div>
+              ) : (
+                <>
+                  {/* Location Statistics Summary */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
+                    <Card className="bg-gradient-to-br from-blue-50 to-blue-100">
+                      <CardContent className="p-3 sm:p-4">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="text-xs sm:text-sm text-blue-600 font-medium">Unique Locations</p>
+                            <p className="text-xl sm:text-2xl font-bold text-blue-800">{getUniqueLocations().length}</p>
+                          </div>
+                          <MapPin className="h-6 w-6 sm:h-8 sm:w-8 text-blue-500" />
+                        </div>
+                      </CardContent>
+                    </Card>
+                    <Card className="bg-gradient-to-br from-green-50 to-green-100">
+                      <CardContent className="p-3 sm:p-4">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="text-xs sm:text-sm text-green-600 font-medium">Locations with Trends</p>
+                            <p className="text-xl sm:text-2xl font-bold text-green-800">
+                              {getUniqueLocations().filter(loc => loc.count > 1).length}
+                            </p>
+                          </div>
+                          <TrendingUp className="h-6 w-6 sm:h-8 sm:w-8 text-green-500" />
+                        </div>
+                      </CardContent>
+                    </Card>
+                    <Card className="bg-gradient-to-br from-purple-50 to-purple-100">
+                      <CardContent className="p-3 sm:p-4">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="text-xs sm:text-sm text-purple-600 font-medium">Total Samples</p>
+                            <p className="text-xl sm:text-2xl font-bold text-purple-800">{samples.length}</p>
+                          </div>
+                          <Database className="h-6 w-6 sm:h-8 sm:w-8 text-purple-500" />
+                        </div>
+                      </CardContent>
+                    </Card>
+                  </div>
+
+                  {/* Enhanced Location Selector */}
+                  <div className="space-y-4">
+                    <div>
+                      <label className="text-sm font-medium mb-2 block">Select Location for Trend Analysis</label>
+                      <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
+                        <div className="flex-1">
+                          <Select value={selectedLocation} onValueChange={handleLocationChange}>
+                            <SelectTrigger>
+                              <SelectValue placeholder="Choose a location to analyze trends..." />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {getUniqueLocations().map((loc) => (
+                                <SelectItem 
+                                  key={loc.location} 
+                                  value={loc.location}
+                                >
+                                  <div className="flex items-center justify-between w-full">
+                                    <span className="truncate">{loc.location}</span>
+                                    <Badge variant="outline" className="ml-2 flex-shrink-0">
+                                      {loc.count} samples
+                                    </Badge>
+                                  </div>
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        
+                        <div className="flex gap-2">
+                          <Button
+                            variant={chartType === 'line' ? 'default' : 'outline'}
+                            size="sm"
+                            onClick={() => setChartType('line')}
+                            disabled={locationTrendData.length === 0}
+                          >
+                            <LineChartIcon className="h-4 w-4 mr-1" />
+                            <span className="hidden sm:inline">Line</span>
+                            <span className="sm:hidden">━</span>
+                          </Button>
+                          <Button
+                            variant={chartType === 'bar' ? 'default' : 'outline'}
+                            size="sm"
+                            onClick={() => setChartType('bar')}
+                            disabled={locationTrendData.length === 0}
+                          >
+                            <BarChart3 className="h-4 w-4 mr-1" />
+                            <span className="hidden sm:inline">Bar</span>
+                            <span className="sm:hidden">▓</span>
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Metal Selection Buttons */}
+                    {locationTrendData.length > 0 && (
+                      <div className="space-y-2">
+                        <label className="text-sm font-medium">Select Metals to Display:</label>
+                        <div className="flex flex-wrap gap-1 sm:gap-2">
+                          {[
+                            { key: 'arsenic', label: 'As', color: 'bg-blue-500' },
+                            { key: 'cadmium', label: 'Cd', color: 'bg-red-500' },
+                            { key: 'chromium', label: 'Cr', color: 'bg-green-500' },
+                            { key: 'lead', label: 'Pb', color: 'bg-yellow-500' },
+                            { key: 'mercury', label: 'Hg', color: 'bg-purple-500' },
+                            { key: 'nickel', label: 'Ni', color: 'bg-orange-500' },
+                            { key: 'copper', label: 'Cu', color: 'bg-cyan-500' },
+                            { key: 'zinc', label: 'Zn', color: 'bg-pink-500' }
+                          ].map((metal) => (
+                            <Button
+                              key={metal.key}
+                              variant={selectedMetals.includes(metal.key) ? 'default' : 'outline'}
+                              size="sm"
+                              onClick={() => {
+                                setSelectedMetals(prev => 
+                                  prev.includes(metal.key) 
+                                    ? prev.filter(m => m !== metal.key)
+                                    : [...prev, metal.key]
+                                );
+                              }}
+                              className={`text-xs px-2 py-1 ${selectedMetals.includes(metal.key) ? metal.color : ''}`}
+                            >
+                              <span className="hidden sm:inline">{metal.label}</span>
+                              <span className="sm:hidden">{metal.label}</span>
+                            </Button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Pollution Indices Selection Buttons */}
+                    {locationTrendData.length > 0 && (
+                      <div className="space-y-2">
+                        <label className="text-sm font-medium">Select Pollution Indices to Display:</label>
+                        <div className="flex flex-wrap gap-1 sm:gap-2">
+                          {[
+                            { key: 'hpi', label: 'HPI', color: 'bg-purple-500' },
+                            { key: 'hei', label: 'HEI', color: 'bg-orange-500' },
+                            { key: 'cd', label: 'CD', color: 'bg-cyan-500' },
+                            { key: 'npi', label: 'NPI', color: 'bg-pink-500' }
+                          ].map((index) => (
+                            <Button
+                              key={index.key}
+                              variant={selectedIndices.includes(index.key) ? 'default' : 'outline'}
+                              size="sm"
+                              onClick={() => {
+                                setSelectedIndices(prev => 
+                                  prev.includes(index.key) 
+                                    ? prev.filter(i => i !== index.key)
+                                    : [...prev, index.key]
+                                );
+                              }}
+                              className={`text-xs px-2 py-1 ${selectedIndices.includes(index.key) ? index.color : ''}`}
+                            >
+                              {index.label}
+                            </Button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* New Feature Controls */}
+                    {locationTrendData.length > 0 && (
+                      <div className="space-y-4 p-3 sm:p-4 bg-gray-50 rounded-lg">
+                        <h3 className="text-sm font-semibold text-gray-700 mb-3">Advanced Chart Features</h3>
+                        
+                        {/* Dynamic Time Range Selector */}
+                        <div className="space-y-2">
+                          <label className="text-sm font-medium flex items-center gap-2">
+                            <Calendar className="h-4 w-4" />
+                            Time Range Filter
+                          </label>
+                          <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                            <Button
+                              variant={customTimeRange ? 'default' : 'outline'}
+                              size="sm"
+                              onClick={() => setCustomTimeRange(!customTimeRange)}
+                              className="text-xs px-2 py-1"
+                            >
+                              {customTimeRange ? 'Custom Range' : 'All Data'}
+                            </Button>
+                            {customTimeRange && (
+                              <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                                <input
+                                  type="date"
+                                  value={timeRange.start}
+                                  onChange={(e) => setTimeRange(prev => ({...prev, start: e.target.value}))}
+                                  className="px-2 py-1 text-xs sm:text-sm border rounded-md"
+                                />
+                                <span className="text-xs sm:text-sm">to</span>
+                                <input
+                                  type="date"
+                                  value={timeRange.end}
+                                  onChange={(e) => setTimeRange(prev => ({...prev, end: e.target.value}))}
+                                  className="px-2 py-1 text-xs sm:text-sm border rounded-md"
+                                />
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Benchmark Comparison Overlay */}
+                        <div className="space-y-2">
+                          <label className="text-sm font-medium flex items-center gap-2">
+                            <Target className="h-4 w-4" />
+                            Benchmark Comparison
+                          </label>
+                          <div className="flex flex-col sm:flex-row sm:items-center gap-2 flex-wrap">
+                            <Button
+                              variant={showBenchmark ? 'default' : 'outline'}
+                              size="sm"
+                              onClick={() => setShowBenchmark(!showBenchmark)}
+                              className="text-xs px-2 py-1"
+                            >
+                              {showBenchmark ? 'Hide' : 'Show'} Standards
+                            </Button>
+                            {showBenchmark && (
+                              <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                                <Select value={benchmarkType} onValueChange={(value: 'WHO' | 'EPA' | 'Custom') => setBenchmarkType(value)}>
+                                  <SelectTrigger className="w-24 sm:w-32 text-xs sm:text-sm">
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="WHO">WHO</SelectItem>
+                                    <SelectItem value="EPA">EPA</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                                <div className="flex items-center gap-1 text-xs text-gray-600">
+                                  <span>Style:</span>
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className="h-6 px-2 text-xs"
+                                    onClick={() => {
+                                      // Toggle between minimal and full benchmark display
+                                      const event = new CustomEvent('toggleBenchmarkStyle');
+                                      window.dispatchEvent(event);
+                                    }}
+                                  >
+                                    Minimal
+                                  </Button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                          {showBenchmark && (
+                            <div className="text-xs text-gray-500 mt-1">
+                              💡 Only shows benchmarks for metals approaching limits
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Loading State */}
+                    {trendLoading && (
+                      <div className="flex items-center justify-center py-8">
+                        <div className="animate-spin mr-3 h-6 w-6 border-2 border-current border-t-transparent rounded-full" />
+                        <span>Loading location trend data...</span>
+                      </div>
+                    )}
+
+                    {/* No Location Selected */}
+                    {!trendLoading && !selectedLocation && (
+                      <div className="text-center py-12 bg-gray-50 rounded-lg">
+                        <MapPin className="h-12 w-12 mx-auto mb-4 text-gray-400" />
+                        <h3 className="text-lg font-semibold text-gray-700 mb-2">Select a Location</h3>
+                        <p className="text-gray-500">Choose a location from the dropdown to view trend analysis.</p>
+                      </div>
+                    )}
+
+                    {/* Location Trend Charts */}
+                    {!trendLoading && selectedLocation && locationTrendData.length > 0 && (
+                      <div className="space-y-4 sm:space-y-6">
+                        {/* Trend Chart */}
+                        <Card>
+                          <CardHeader className="pb-4 sm:pb-6">
+                            <div className="flex flex-col gap-4">
+                              <div>
+                                <CardTitle className="flex items-center gap-2 text-lg sm:text-xl">
+                                  <TrendingUp className="h-5 w-5" />
+                                  Pollution Trends for {selectedLocation}
+                                </CardTitle>
+                                <CardDescription className="text-sm sm:text-base">
+                                  Metal concentration changes over time for {selectedLocation}
+                                </CardDescription>
+                              </div>
+                              <div className="flex justify-start sm:justify-end">
+                                <Button
+                                  onClick={exportLocationTrendsToPdf}
+                                  disabled={exportingPdf}
+                                  className="bg-red-600 hover:bg-red-700 text-xs sm:text-sm px-2 sm:px-4 py-2"
+                                >
+                                  {exportingPdf ? (
+                                    <>
+                                      <div className="animate-spin mr-2 h-4 w-4 border-2 border-current border-t-transparent rounded-full" />
+                                      <span className="hidden sm:inline">Exporting...</span>
+                                      <span className="sm:hidden">...</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Download className="mr-2 h-4 w-4" />
+                                      <span className="hidden sm:inline">Export PDF</span>
+                                      <span className="sm:hidden">PDF</span>
+                                    </>
+                                  )}
+                                </Button>
+                              </div>
+                            </div>
+                          </CardHeader>
+                          <CardContent id="location-trends-chart" className="p-2 sm:p-4">
+                            <ResponsiveContainer width="100%" height={450}>
+                              {chartType === 'line' ? (
+                                <LineChart 
+                                  data={getTrendChartData()}
+                                  margin={{ top: 20, right: 20, left: 100, bottom: 100 }}
+                                >
+                                  <CartesianGrid strokeDasharray="3 3" />
+                                  <XAxis 
+                                    dataKey="date"
+                                    tick={{ fontSize: 12 }}
+                                    angle={-45}
+                                    textAnchor="end"
+                                    height={100}
+                                    interval={0}
+                                  />
+                                  <YAxis 
+                                    tick={{ fontSize: 12 }}
+                                    label={{ value: 'Concentration (mg/L)', angle: -90, position: 'insideLeft', style: { fontSize: 14, textAnchor: 'middle' }, offset: -50 }}
+                                  />
+                                  <Tooltip 
+                                    content={({ active, payload }) => {
+                                      if (active && payload && payload.length) {
+                                        const data = payload[0].payload;
+                                        return (
+                                          <div className="bg-white p-3 border rounded shadow-lg">
+                                            <p className="font-semibold">{data.fullDate}</p>
+                                            {selectedMetals.map(metal => (
+                                              <p key={metal} className="text-sm">
+                                                {metal.charAt(0).toUpperCase() + metal.slice(1)}: {data[metal]} mg/L
+                                              </p>
+                                            ))}
+                                            <p className="text-sm font-semibold mt-1">HPI: {data.hpi}</p>
+                                          </div>
+                                        );
+                                      }
+                                      return null;
+                                    }}
+                                  />
+                                  <Legend />
+                                  {/* Improved Benchmark Reference Lines */}
+                                  {getCriticalBenchmarkLines(selectedMetals, 'metals').map((line, index) => (
+                                    <ReferenceLine
+                                      key={line.key}
+                                      y={line.y}
+                                      stroke="#ff6b6b"
+                                      strokeDasharray="8 4"
+                                      strokeWidth={1.5}
+                                      label={{
+                                        value: line.label,
+                                        position: line.position,
+                                        offset: 8,
+                                        fill: '#ff6b6b',
+                                        fontSize: 10,
+                                        fontWeight: 'normal'
+                                      }}
+                                    />
+                                  ))}
+                                  {selectedMetals.map((metal, index) => (
+                                    <Line
+                                      key={metal}
+                                      type="monotone"
+                                      dataKey={metal}
+                                      stroke={['#3b82f6', '#ef4444', '#22c55e', '#eab308', '#a855f7', '#f97316', '#06b6d4', '#ec4899'][index]}
+                                      strokeWidth={2}
+                                      dot={{ r: 4 }}
+                                    />
+                                  ))}
+                                  {/* Time Range Brush */}
+                                  {customTimeRange && (
+                                    <Brush 
+                                      dataKey="date" 
+                                      height={30} 
+                                      stroke="#8884d8"
+                                      startIndex={getTrendChartData().findIndex(item => item.date >= new Date(timeRange.start).toLocaleDateString())}
+                                      endIndex={getTrendChartData().findIndex(item => item.date >= new Date(timeRange.end).toLocaleDateString())}
+                                    />
+                                  )}
+                                </LineChart>
+                              ) : (
+                                <BarChart 
+                                  data={getTrendChartData()}
+                                  margin={{ top: 20, right: 20, left: 100, bottom: 100 }}
+                                >
+                                  <CartesianGrid strokeDasharray="3 3" />
+                                  <XAxis 
+                                    dataKey="date" 
+                                    tick={{ fontSize: 12 }}
+                                    angle={-45}
+                                    textAnchor="end"
+                                    height={100}
+                                    interval={0}
+                                  />
+                                  <YAxis 
+                                    tick={{ fontSize: 12 }}
+                                    label={{ value: 'Concentration (mg/L)', angle: -90, position: 'insideLeft', style: { fontSize: 14, textAnchor: 'middle' }, offset: -50 }}
+                                  />
+                                  <Tooltip 
+                                    contentStyle={{ backgroundColor: 'rgba(255, 255, 255, 0.95)', border: '1px solid #ccc' }}
+                                    labelStyle={{ fontWeight: 'bold' }}
+                                  />
+                                  <Legend />
+                                  {/* Improved Benchmark Reference Lines */}
+                                  {getCriticalBenchmarkLines(selectedMetals, 'metals').map((line, index) => (
+                                    <ReferenceLine
+                                      key={line.key}
+                                      y={line.y}
+                                      stroke="#ff6b6b"
+                                      strokeDasharray="8 4"
+                                      strokeWidth={1.5}
+                                      label={{
+                                        value: line.label,
+                                        position: line.position,
+                                        offset: 8,
+                                        fill: '#ff6b6b',
+                                        fontSize: 10,
+                                        fontWeight: 'normal'
+                                      }}
+                                    />
+                                  ))}
+                                  {selectedMetals.map((metal, index) => (
+                                    <Bar
+                                      key={metal}
+                                      dataKey={metal}
+                                      fill={['#3b82f6', '#ef4444', '#22c55e', '#eab308', '#a855f7', '#f97316', '#06b6d4', '#ec4899'][index]}
+                                    />
+                                  ))}
+                                  {/* Time Range Brush */}
+                                  {customTimeRange && (
+                                    <Brush 
+                                      dataKey="date" 
+                                      height={30} 
+                                      stroke="#8884d8"
+                                      startIndex={getTrendChartData().findIndex(item => item.date >= new Date(timeRange.start).toLocaleDateString())}
+                                      endIndex={getTrendChartData().findIndex(item => item.date >= new Date(timeRange.end).toLocaleDateString())}
+                                    />
+                                  )}
+                                </BarChart>
+                              )}
+                            </ResponsiveContainer>
+                          </CardContent>
+                        </Card>
+
+                        {/* Pollution Indices Trends Chart */}
+                        <Card>
+                          <CardHeader className="pb-4 sm:pb-6">
+                            <CardTitle className="flex items-center gap-2 text-lg sm:text-xl">
+                              <TrendingUp className="h-5 w-5" />
+                              Pollution Indices Trends for {selectedLocation}
+                            </CardTitle>
+                            <CardDescription className="text-sm sm:text-base">
+                              Pollution index changes over time for {selectedLocation}
+                            </CardDescription>
+                          </CardHeader>
+                          <CardContent id="pollution-index-chart" className="p-2 sm:p-4">
+                            <ResponsiveContainer width="100%" height={450}>
+                              {chartType === 'line' ? (
+                                <LineChart 
+                                  data={getTrendChartData()}
+                                  margin={{ top: 20, right: 20, left: 100, bottom: 100 }}
+                                >
+                                  <CartesianGrid strokeDasharray="3 3" />
+                                  <XAxis 
+                                    dataKey="date"
+                                    tick={{ fontSize: 12 }}
+                                    angle={-45}
+                                    textAnchor="end"
+                                    height={100}
+                                    interval={0}
+                                  />
+                                  <YAxis 
+                                    tick={{ fontSize: 12 }}
+                                    label={{ value: 'Pollution Index Value', angle: -90, position: 'insideLeft', style: { fontSize: 14, textAnchor: 'middle' }, offset: -50 }}
+                                  />
+                                  <Tooltip 
+                                    content={({ active, payload }) => {
+                                      if (active && payload && payload.length) {
+                                        const data = payload[0].payload;
+                                        return (
+                                          <div className="bg-white p-3 border rounded shadow-lg">
+                                            <p className="font-semibold">{data.fullDate}</p>
+                                            {selectedIndices.map(index => (
+                                              <p key={index} className="text-sm">
+                                                {index.toUpperCase()}: {data[index]}
+                                              </p>
+                                            ))}
+                                          </div>
+                                        );
+                                      }
+                                      return null;
+                                    }}
+                                  />
+                                  <Legend />
+                                  {/* Improved Benchmark Reference Lines */}
+                                  {getCriticalBenchmarkLines(selectedIndices, 'indices').map((line) => (
+                                    <ReferenceLine
+                                      key={line.key}
+                                      y={line.y}
+                                      stroke="#ff6b6b"
+                                      strokeDasharray="8 4"
+                                      strokeWidth={1.5}
+                                      label={{
+                                        value: line.label,
+                                        position: line.position,
+                                        offset: 8,
+                                        fill: '#ff6b6b',
+                                        fontSize: 10,
+                                        fontWeight: 'normal'
+                                      }}
+                                    />
+                                  ))}
+                                  {selectedIndices.map((index, idx) => (
+                                    <Line
+                                      key={index}
+                                      type="monotone"
+                                      dataKey={index}
+                                      stroke={['#a855f7', '#f97316', '#06b6d4', '#ec4899'][idx]}
+                                      strokeWidth={2}
+                                      dot={{ r: 4 }}
+                                    />
+                                  ))}
+                                  {/* Time Range Brush */}
+                                  {customTimeRange && (
+                                    <Brush 
+                                      dataKey="date" 
+                                      height={30} 
+                                      stroke="#8884d8"
+                                      startIndex={getTrendChartData().findIndex(item => item.date >= new Date(timeRange.start).toLocaleDateString())}
+                                      endIndex={getTrendChartData().findIndex(item => item.date >= new Date(timeRange.end).toLocaleDateString())}
+                                    />
+                                  )}
+                                </LineChart>
+                              ) : (
+                                <BarChart 
+                                  data={getTrendChartData()}
+                                  margin={{ top: 20, right: 20, left: 100, bottom: 100 }}
+                                >
+                                  <CartesianGrid strokeDasharray="3 3" />
+                                  <XAxis 
+                                    dataKey="date" 
+                                    tick={{ fontSize: 12 }}
+                                    angle={-45}
+                                    textAnchor="end"
+                                    height={100}
+                                    interval={0}
+                                  />
+                                  <YAxis 
+                                    tick={{ fontSize: 12 }}
+                                    label={{ value: 'Pollution Index Value', angle: -90, position: 'insideLeft', style: { fontSize: 14, textAnchor: 'middle' }, offset: -50 }}
+                                  />
+                                  <Tooltip 
+                                    contentStyle={{ backgroundColor: 'rgba(255, 255, 255, 0.95)', border: '1px solid #ccc' }}
+                                    labelStyle={{ fontWeight: 'bold' }}
+                                  />
+                                  <Legend />
+                                  {/* Improved Benchmark Reference Lines */}
+                                  {getCriticalBenchmarkLines(selectedIndices, 'indices').map((line) => (
+                                    <ReferenceLine
+                                      key={line.key}
+                                      y={line.y}
+                                      stroke="#ff6b6b"
+                                      strokeDasharray="8 4"
+                                      strokeWidth={1.5}
+                                      label={{
+                                        value: line.label,
+                                        position: line.position,
+                                        offset: 8,
+                                        fill: '#ff6b6b',
+                                        fontSize: 10,
+                                        fontWeight: 'normal'
+                                      }}
+                                    />
+                                  ))}
+                                  {selectedIndices.map((index, idx) => (
+                                    <Bar
+                                      key={index}
+                                      dataKey={index}
+                                      fill={['#a855f7', '#f97316', '#06b6d4', '#ec4899'][idx]}
+                                    />
+                                  ))}
+                                  {/* Time Range Brush */}
+                                  {customTimeRange && (
+                                    <Brush 
+                                      dataKey="date" 
+                                      height={30} 
+                                      stroke="#8884d8"
+                                      startIndex={getTrendChartData().findIndex(item => item.date >= new Date(timeRange.start).toLocaleDateString())}
+                                      endIndex={getTrendChartData().findIndex(item => item.date >= new Date(timeRange.end).toLocaleDateString())}
+                                    />
+                                  )}
+                                </BarChart>
+                              )}
+                            </ResponsiveContainer>
+                          </CardContent>
+                        </Card>
+
+                        {/* Historical Data Table */}
+                        <Card>
+                          <CardHeader className="pb-4 sm:pb-6">
+                            <CardTitle className="text-lg sm:text-xl">Historical Data for {selectedLocation}</CardTitle>
+                            <CardDescription className="text-sm sm:text-base">
+                              Detailed sample data for {selectedLocation} sorted by date
+                            </CardDescription>
+                          </CardHeader>
+                          <CardContent className="p-2 sm:p-4">
+                            <div className="overflow-x-auto max-w-full">
+                              <table className="w-full text-xs sm:text-sm">
+                                <thead>
+                                  <tr className="border-b">
+                                    <th className="text-left p-2">Sample ID</th>
+                                    <th className="text-left p-2">Date</th>
+                                    <th className="text-left p-2">As</th>
+                                    <th className="text-left p-2">Cd</th>
+                                    <th className="text-left p-2">Cr</th>
+                                    <th className="text-left p-2">Pb</th>
+                                    <th className="text-left p-2">Hg</th>
+                                    <th className="text-left p-2">Ni</th>
+                                    <th className="text-left p-2">Cu</th>
+                                    <th className="text-left p-2">Zn</th>
+                                    <th className="text-left p-2">HPI</th>
+                                    <th className="text-left p-2">Status</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {locationTrendData.map((sample, index) => (
+                                    <tr key={sample.id} className="border-b hover:bg-gray-50">
+                                      <td className="p-2 font-medium">{sample.sampleId}</td>
+                                      <td className="p-2">{new Date(sample.createdAt).toLocaleDateString()}</td>
+                                      <td className="p-2">{sample.arsenic}</td>
+                                      <td className="p-2">{sample.cadmium}</td>
+                                      <td className="p-2">{sample.chromium}</td>
+                                      <td className="p-2">{sample.lead}</td>
+                                      <td className="p-2">{sample.mercury}</td>
+                                      <td className="p-2">{sample.nickel}</td>
+                                      <td className="p-2">{sample.copper}</td>
+                                      <td className="p-2">{sample.zinc}</td>
+                                      <td className="p-2 font-semibold">{sample.hpi?.toFixed(2)}</td>
+                                      <td className="p-2">
+                                        <Badge 
+                                          variant={sample.hpiCategory === 'Clean' ? 'default' : 
+                                                  sample.hpiCategory === 'Moderate' ? 'secondary' : 'destructive'}
+                                          className="text-xs"
+                                        >
+                                          {sample.hpiCategory}
+                                        </Badge>
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </CardContent>
+                        </Card>
+
+                        {/* Trend Analysis Summary */}
+                        <div className="bg-gradient-to-r from-green-50 to-blue-50 p-3 sm:p-4 rounded-lg">
+                          <h4 className="font-semibold text-sm sm:text-base mb-3 sm:mb-4">Trend Analysis Summary</h4>
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
+                            <div>
+                              <p className="text-sm text-gray-600">Date Range</p>
+                              <p className="font-semibold">
+                                {new Date(locationTrendData[0]?.createdAt).toLocaleDateString()} - {new Date(locationTrendData[locationTrendData.length - 1]?.createdAt).toLocaleDateString()}
+                              </p>
+                            </div>
+                            <div>
+                              <p className="text-sm text-gray-600">Average HPI</p>
+                              <p className="font-semibold">
+                                {(locationTrendData.reduce((sum, s) => sum + (s.hpi || 0), 0) / locationTrendData.length).toFixed(2)}
+                              </p>
+                            </div>
+                            <div>
+                              <p className="text-sm text-gray-600">Trend Direction</p>
+                              <p className="font-semibold">
+                                {locationTrendData.length > 1 ? (
+                                  locationTrendData[locationTrendData.length - 1].hpi! > locationTrendData[0].hpi! ? (
+                                    <span className="text-red-600">↑ Increasing</span>
+                                  ) : locationTrendData[locationTrendData.length - 1].hpi! < locationTrendData[0].hpi! ? (
+                                    <span className="text-green-600">↓ Decreasing</span>
+                                  ) : (
+                                    <span className="text-gray-600">→ Stable</span>
+                                  )
+                                ) : (
+                                  <span className="text-gray-600">Insufficient data</span>
+                                )}
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
+    </div>
+  );
+}
